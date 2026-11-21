@@ -15,6 +15,12 @@
 4. 複数回計測する
    - 中央値や分位点を比較します。割り当てや遅延のばらつきが問題なら、GC を含む計測値の分布も確認します。
 
+### ランタイムによる割り当ての違い
+
+HotSpot C2 は、呼び出し先をインライン化でき、結果がその範囲の外に逃げない場合などに、Escape Analysis とスカラー置換で `Pair` などの割り当てを除去できます。ローカル JUnit で差が見えない場合は、結果の使い方や呼び出し先のインライン化のされやすさが実際の経路と同等か確認します。 [HotSpot の Escape Analysis](https://docs.oracle.com/en/java/javase/24/vm/java-hotspot-virtual-machine-performance-enhancements.html)
+
+割り当て除去の影響を切り分けるには、必要に応じて HotSpot のテスト JVM に `-XX:-DoEscapeAnalysis` を付け、既定設定と比較します。このフラグはテスト JVM 全体に作用します。ART にも割り当てを除去する最適化があり、適用条件は HotSpot と異なります。Android が対象なら、実際の呼び出し方とリリース相当のビルド・コンパイル条件で、実機の実行時間と割り当て量を確認します。 [ART の最適化実装](https://android.googlesource.com/platform/art/+/582bbcf317c731c33ecb3ab001e4268466d5530f/compiler/optimizing/load_store_elimination.cc)
+
 ## ベンチマークのテンプレート
 
 以下は `Int` を返す処理を比べる JVM 用の例です。テストの配置と実行コマンドは対象モジュールに合わせます。たとえば標準の Gradle JVM プロジェクトでは `src/test/kotlin/` に置き、`./gradlew test --tests "*QuickPerfBenchmarkTest*"` で実行できます。
