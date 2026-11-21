@@ -222,6 +222,15 @@ fun matchUsers(orders: List<Order>, users: List<User>): List<Pair<Order, User?>>
 - **ログの文字列補間**。`debug("items=${items.joinToString()}")` のように `String` を渡すと、ログ関数がレベルを判定する前に走査と文字列化が実行されます。メッセージ生成に必要な処理を、レベルを確認した分岐の内側や遅延評価に対応するログ API に移す方法を比較します。 [Kotlin の文字列テンプレート](https://kotlinlang.org/docs/strings.html) · [Android の Log API](https://developer.android.com/reference/android/util/Log)
 - **失敗が頻出する変換**。`runCatching { text.toInt() }.getOrNull()` は、不正入力のたびに `NumberFormatException` を生成して捕捉します。変換失敗を `null` で扱う用途では `toIntOrNull()` を比較し、代表的な失敗率を計測条件に含めます。 [Kotlin の例外処理](https://kotlinlang.org/docs/exceptions.html)
 
+## 時刻取得の繰り返し
+
+ホットループでは、時計の読み取り回数と、取得した値を `Instant` やエポックミリ秒に変換する経路を確認します。たとえば期限切れの一括判定で「バッチ開始時点」が基準なら、`items.count { it.expiresAt <= Clock.System.now() }` の時刻取得を外に出し、先頭で取得した `now` を使います。判定基準の直前、ちょうど、直後に期限がある項目で結果を確認します。処理の途中でタイムアウトを検出する必要がある場合は、許容できる検出の遅れに合わせて時計を読み直します。
+
+- 記録や絶対時刻での期限判定には `Clock.System.now()` や `System.currentTimeMillis()` を使います。端末の時刻補正で値が前後することがあります。 [Kotlin の `Clock.System`](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.time/-clock/-system/)
+- 経過時間の計測には `kotlin.time.measureTime` や `System.nanoTime()` を使います。Android でディープスリープを含める場合は `SystemClock.elapsedRealtime()` または `elapsedRealtimeNanos()` を使います。開始と終了は同じ時計で読み、単位をそろえます。 [Kotlin の時間計測](https://kotlinlang.org/docs/time-measurement.html) · [Android の `SystemClock`](https://developer.android.com/reference/android/os/SystemClock)
+
+複数の Android 実機で同じ期限判定を計測したところ、時刻の取得とエポックミリ秒への変換をバッチごとに一度にまとめると、いずれも処理時間が短くなりました。時計は用途に合わせて選び、取得と変換の回数を減らせるかを先に確認します。効果は代表的なバッチサイズで処理全体を比較して判断します。
+
 ## 共有状態の競合
 
 共有状態を更新する経路では、ロックを待つ時間とロック内で処理する時間を確認します。共有キューや集計器など、複数の処理が同じ状態に集中する箇所を対象に、単独実行と代表的な並行度でスループットや待ち時間を比較します。競合が大きい場合は、共有状態に依存しない処理をロックの外に出す方法や、局所的に集計してからまとめて反映する方法を検討します。変更前後で更新の原子性、順序、他の処理から結果が見えるタイミングを確認します。
