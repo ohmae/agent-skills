@@ -4,51 +4,50 @@
 
 ## 計測条件
 
-JVM 上でマイクロ秒〜ミリ秒単位の計測を行う際、単に 1 回だけ `measureTime { ... }` を実行すると、クラスロードや JIT コンパイル（インタプリタ実行）の時間が支配的になり、正しい比較ができません。必ず以下のルールを守ってください。
+計測範囲は仮説に合わせます。定常状態の比較では、初回のクラスロードや JIT コンパイルの影響を抑えます。起動直後の処理が対象なら、初回の条件を再現して計測します。
 
 1. 入力サイズを決める
-   - 1 回の実行が数ミリ秒〜数十ミリ秒程度になる入力サイズ（例: `N = 1,000 〜 50,000`）でテストデータを固定生成（シード固定の `Random(42)` など）します。
+   - 実際の入力サイズ・分布・アクセス順序を再現し、前後で同じ条件を使います。乱数を使うならシードを固定します。1 回の処理が短すぎる場合は、入力を大きくするとアクセス特性が変わるため、代表的な入力のまま複数回分をまとめて計測する方法を検討します。
 2. ウォームアップする
-   - 計測本番の前に、同じ関数を最低 10〜50 回（または合計 200ms〜500ms 程度）空回しして JIT コンパイルを促します。
+   - 定常状態を測る場合は、計測と同じ処理を事前に繰り返します。下の回数は初期値として使い、計測値の推移を見て調整します。
 3. デッドコード削除（DCE）を防ぐ
-   - 関数の戻り値を全く使わないと、JIT コンパイラが計算自体をスキップする可能性があります。戻り値のサイズやハッシュ値を合算（`blackhole` 変数に加算）し、最後に `assertTrue` や `println` で参照してください。
+   - 結果を軽量な方法で消費します。結果の利用まで含めて測る場合は実際の呼び出し側に合わせます。サイズの参照だけで計算の一部が省かれたり、出力全体のハッシュ計算が測定対象より重くなったりする場合は、出力に合う消費方法に変えます。
 4. 複数回計測する
-   - GC 等による単発のスパイクを除外するため、複数イテレーション計測して中央値を比較指標にします。
+   - 中央値や分位点を比較します。割り当てや遅延のばらつきが問題なら、GC を含む計測値の分布も確認します。
 
 ## ベンチマークのテンプレート
 
-対象プロジェクトの `src/test/kotlin/` 配下に一時的（または回帰確認用）に以下のようなテストを作成して `./gradlew test --tests "*PerfTest*"` で実行します。
+以下は `Int` を返す処理を比べる JVM 用の例です。テストの配置と実行コマンドは対象モジュールに合わせます。たとえば標準の Gradle JVM プロジェクトでは `src/test/kotlin/` に置き、`./gradlew test --tests "*QuickPerfBenchmarkTest*"` で実行できます。
 
 ```kotlin
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 import kotlin.time.measureTime
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class QuickPerfBenchmarkTest {
 
     /**
-     * 外部依存ゼロの軽量ベンチマークヘルパー
+     * ベンチマーク用ライブラリを追加せずに計測する
      */
-    private fun <T> runBenchmark(
+    private inline fun runBenchmark(
         name: String,
         warmupIterations: Int = 20,
         measureIterations: Int = 50,
-        block: () -> T
+        block: () -> Int
     ): Double {
         var blackhole = 0
 
         // ウォームアップ
         repeat(warmupIterations) {
-            blackhole = blackhole xor (block()?.hashCode() ?: 0)
+            blackhole = 31 * blackhole + block()
         }
 
-        // 計測前に GC を要求
-        System.gc()
         val samplesMs = DoubleArray(measureIterations)
         repeat(measureIterations) { i ->
             val duration: Duration = measureTime {
-                blackhole = blackhole xor (block()?.hashCode() ?: 0)
+                blackhole = 31 * blackhole + block()
             }
             samplesMs[i] = duration.toDouble(DurationUnit.MILLISECONDS)
         }
@@ -70,6 +69,7 @@ class QuickPerfBenchmarkTest {
     fun compareBeforeAndAfter() {
         // 固定シードや決定論的なテストデータを準備（計測ループの外で作る）
         val inputData = prepareTestData(size = 10_000)
+        assertEquals(processOriginal(inputData), processOptimized(inputData))
 
         val beforeMedian = runBenchmark("Before (Original)") {
             processOriginal(inputData)
@@ -90,8 +90,8 @@ class QuickPerfBenchmarkTest {
 
 ## 変更前後の比較
 
-1. 同一プロセス内で比較する
-   - リファクタリング前のロジックを一時的にテスト内の別関数（`processOriginal`）として残し、リファクタリング後の関数（`processOptimized`）と 1つのテスト内で連続して計測 すると、マシン負荷の揺らぎによる誤差を最小限に抑えられます。
-   - 計測前に `assertEquals(processOriginal(inputData), processOptimized(inputData))` を実行し、同じ入力で出力が一致することを確認します。
+1. 前後の条件をそろえる
+   - 同じプロセスで手軽に比較できます。実行順序で差が変わる場合は順序を入れ替え、初回実行や共有状態の影響を見る場合はプロセスを分けます。入力を変更する処理では、毎回同等の状態から始めます。
+   - 計測の外で、同じ入力に対する前後の結果が一致することを出力型に合う方法で確認します。
 2. 比較用のコードを片付ける
    - 計測と検証が完了したら、比較用の旧実装コードは削除し、機能テスト（エッジケースを含む正確性テスト）をクリーンな状態で残します。

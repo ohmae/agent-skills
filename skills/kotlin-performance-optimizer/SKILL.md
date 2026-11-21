@@ -2,7 +2,7 @@
 name: kotlin-performance-optimizer
 license: MIT
 description: >-
-  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, improving CPU cache hit rates and memory layout, eliminating redundant memory copies across processing stages, avoiding counterproductive memoization/caching overhead, fixing O(N^2) collection operations, or reducing boxing and temporary object allocations. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
+  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, inefficient algorithms or data access, redundant memory copies across processing stages, counterproductive memoization, or allocation and boxing overhead. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
 ---
 
 # Kotlin Performance Optimizer
@@ -11,17 +11,16 @@ Kotlin の計算ロジック、データ処理、処理フローから静的解�
 
 ## 最適化の原則
 
-パフォーマンス最適化において、理論上の計算量（`O(N)` や `O(1)`）だけに注目するのは危険です。現代の CPU では「演算そのもののコスト」よりも「メモリからデータをフェッチ・コピーするコスト（CPU キャッシュミス）」の方が圧倒的に高い（L1 キャッシュ参照に対しメインメモリ参照は 100〜200 倍以上遅い）ためです。
+計算量に加え、実際のデータ配置とアクセス順序を優先して確認します。同じ計算量でも、メモリの読み書きやコピー、割り当ての負荷によって処理時間は変わります。
 
 1. ホットパスへの集中
-   - 処理時間の大部分はコード全体のごく一部（ホットパス）が占めます。ホットパス以外の可読性を犠牲にしてはいけません。
-   - また、Kotlin が遅いのではなく「無自覚なメモリコピーとボクシング」が遅さの原因であることが大半です。ネイティブ（C/C++）実装などを検討する前に、まず Kotlin 上での無駄なアロケーションとメモリアクセスを削ぎ落とします。
+   - 呼び出し頻度と 1 回あたりのコストから、対象の負荷に大きく寄与する処理を特定します。コピーやボクシングのほか、計算、探索、同期なども候補に含めます。
 2. メモリアクセス順序とデータ配置
-   - オブジェクトの参照を辿るポインタチェイシング（Pointer Chasing）やランダムアクセスを避け、CPU のプリフェッチャが効くシーケンシャルアクセス（連続メモリ走査）と時間的・空間的局所性（Cache Locality）を最大化する処理順序を優先します。
+   - ポインタチェイシング（Pointer Chasing）やランダムアクセスが負荷になっている場合は、連続走査や近くのデータをまとめて処理できる順序・配置を検討します。
 3. メモ化のコスト
    - 保存済みの結果を探して読み出すコストが再計算を上回る場合、メモ化は逆効果です。ヒット時の読み出しに加え、ミス時の再計算と結果の格納も含めて判断します。
 4. データサイズと定数倍のコスト
-   - `N` が極小〜小規模（例: `N ≤ 32` 程度）の場合、再帰や複雑な管理構造を持つ `O(N log N)` / `O(1)` アルゴリズムより、連続メモリ上の単純な `O(N^2)`（挿入ソートやバブルソート）や線形走査の方が分岐予測とキャッシュヒット率に優れ高速です（標準の `IntArray.sort()` / `Arrays.sort()` が内部で要素数に応じて挿入ソートと Dual-Pivot Quicksort を切り替えているのもこのためです）。
+   - 入力の規模や分布によって有利な実装は変わります。たとえば検索回数が少ない場合、索引を作るより既存の配列を走査する方が速いことがあります。
 
 ## 対象範囲
 
@@ -38,28 +37,28 @@ Kotlin の計算ロジック、データ処理、処理フローから静的解�
 
 対象のファイルまたはモジュールを読み込み、[references/anti-patterns.md](./references/anti-patterns.md) のカタログおよび必要に応じた検索スクリプト（[scripts/scan-kotlin-hotspots.sh](./scripts/scan-kotlin-hotspots.sh)）を用いてボトルネック候補を洗い出します。
 
-次の項目を優先して確認します。
+次の項目を優先して確認します。カタログと検索結果は調査の手がかりです。スクリプトが拾いにくい複数行の処理、独自 API、呼び出し先に隠れた処理も、実際のデータフローに沿って確認します。
 
 1. メモリアクセスパターンと CPU キャッシュ局所性（Cache Locality）
-   - キャッシュ非効率なループ順序: 2 次元データ（行列・画像ピクセル・グリッド等）での列方向（ストライド飛び）走査や、複数パスに分かれたループ（Loop Fusion で 1 パスに統合し L1 キャッシュに乗ったまま処理できないか）
+   - データ配置に対してストライドが大きい走査や、同じ範囲を繰り返し読み書きする処理。走査順序やループ統合の例は [メモリアクセスと CPU キャッシュ局所性](./references/anti-patterns.md#メモリアクセスと-cpu-キャッシュ局所性) を参照してください。
    - ポインタチェイシング（Pointer Chasing）: `List<Point>` やネストしたオブジェクト配列の大量走査（プリミティブ配列 `IntArray` / `FloatArray` へのフラット化や Structure of Arrays (SoA) 化ができないか）
    - メモ化。保存済みの結果を取得する際のメモリアクセスや同期の負荷を確認します。評価方法は [メモ化のコスト](./references/anti-patterns.md#メモ化のコスト) を参照してください。
    - データフロー上のメモリコピー。ホットパスの入力から最終出力までデータの表現と受け渡しを追い、処理境界での全体・部分コピーや中間バッファへの書き出しを確認します。コピー量、頻度、必要性の見積もり方と削減例は [データフロー上のメモリコピー](./references/anti-patterns.md#データフロー上のメモリコピー) を参照してください。
 2. コレクション・Sequence の中間オブジェクト生成
-   - 複数段に連なる `map { ... }.filter { ... }.take(...)` 等による不要な中間 `List` の生成（その都度ヒープ確保とメモリ書き戻しが発生しキャッシュを汚染する）
+   - 多段処理での中間結果の実体化や、結果を使わない要素まで走査する箇所。たとえば `map { ... }.filter { ... }.take(...)` を確認します。
    - 要素数が既知のコレクション生成における初期容量（Initial Capacity）未指定や、`buildList` / `asSequence()` / ループへの統合余地
-   - プリミティブを扱う Map / Set（標準の `HashMap<Int, Int>` ではなく AndroidX `androidx.collection` の `IntIntMap`, `LongObjectMap` や配列インデックス直接参照に置き換え可能か）
+   - 要素やキーがボクシングされる構造。キーの分布や操作に応じて、プリミティブ配列や `IntIntMap` などの専用構造を候補にします。
 3. ボクシングと不要なオブジェクト割り当て・配列コピー（Allocation / GC 負荷）
-   - ホットループ内での `Pair` / `Triple` / データクラス返却や分解宣言（引数への書き出し `Out Parameter` や、2 つの 32 ビット 値を `Long` にパックした `@JvmInline value class` でヒープ確保とボクシングをゼロにできないか）
-   - 可変長引数（`vararg`）とスプレッド演算子（`*array`）のループ内使用（裏側で毎回 `Arrays.copyOf` や `SpreadBuilder` による配列コピーが発生していないか）
+   - 呼び出しごとに生成される結果オブジェクトや一時オブジェクト（例として `Pair` やデータクラス）。対象ランタイムでの割り当てを確認します。
+   - 可変長引数（`vararg`）とスプレッド演算子（`*array`）に伴う暗黙の配列生成・コピー。
    - ホットループ内での `Regex(...)`, `SimpleDateFormat`, `Gson`/`Json` インスタンスの都度生成
    - Nullable プリミティブ（`Int?`, `Long?`）やジェネリクス境界によるオートボクシング、高階関数の `inline` 化
 4. アルゴリズムとデータ構造の非効率 (`O(N^2)` 等)
-   - 大規模データ（`N` が大きい場合）のループ内での `List.contains()`, `List.find()`, `List.indexOf()`, `List.firstOrNull()`
+   - データ量と検索回数の積でコストが増える反復探索。標準コレクションの `find` などに加え、独自の検索関数の実装も確認します。
    - ネストされたループでの線形探索、ループ内での文字列連結（`+=`）や毎回のソート（`sortedBy`）
-   - 要素数が少ない場合は、`HashMap` の構築・検索コストと配列走査のキャッシュ効率を比較します。
+   - 索引の構築・更新と検索を合わせた総コストを、走査を繰り返す場合と比較します。
 
-Coroutines / Flow では、ループ内の不要な `withContext` による切り替えや、処理単位が小さすぎる `async` の生成を確認します。
+Coroutines / Flow では、処理本体に対する切り替え・タスク生成のコストや、繰り返す collect による上流処理の再実行を確認します。
 
 ### 2. 改善仮説の整理
 
@@ -76,9 +75,9 @@ Coroutines / Flow では、ループ内の不要な `withContext` による切�
 コードを変更する前に、現在の処理速度を確認するための軽量ベンチマークテストを作成・実行します。
 詳細な計測手順と JUnit ハーネスのテンプレートは [references/micro-benchmarking.md](./references/micro-benchmarking.md) を参照してください。
 
-- 既存の JUnit テスト環境（`src/test/`）を利用し、外部ライブラリの追加なしで `kotlin.time.measureTime` または `System.nanoTime()` を用いて計測します。
-- JIT コンパイルの影響を排除するため、必ずウォームアップ実行を行ってから複数回の平均値または中央値を記録します。
-- キャッシュの逆転現象（`N` が小さいときと大きいときで有利な実装が変わる現象）が疑われる場合は、現実的なデータサイズ (`N`) で計測します。
+- 既存のベンチマーク環境があれば活用します。手軽な JVM 計測には既存の JUnit テスト環境で `kotlin.time.measureTime` や `System.nanoTime()` を使えます。実機やランタイムに依存する仮説は対象環境で確認します。
+- 定常状態の比較ではウォームアップ後に繰り返し計測し、中央値などを記録します。初回実行が問題の場合は、その条件を再現して別途計測します。
+- 実際の入力サイズ・分布・アクセス順序を再現します。負荷によって結果が変わりそうな場合は、代表的な条件を複数比較します。
 - コピー削減では、変更対象の受け渡しを含む処理経路全体を代表的な入力サイズで計測し、前後の実行時間と入力 1 件あたりのコピー回数・概算データ量を比較します。コピー量をコードから算出した場合は推定値として記録します。
 
 ### 4. コードの修正と正確性の検証
@@ -94,4 +93,4 @@ Coroutines / Flow では、ループ内の不要な `withContext` による切�
 - 改善が確認できた場合: 短縮された時間（ms / ns）と改善倍率（または削減率 %）をレポートにまとめます。
 - 改善が見られない・悪化した場合（特にキャッシュ導入やデータ構造変更時）:
   - メモ化で削減した計算時間を、結果の取得・格納の負荷が上回っていないか確認します。`Sequence` の導入では、イテレータやボクシングの負荷を確認します。
-  - 変更をリバートし、よりメモリアクセスが単純・連続的になるアプローチ（フラットな配列・単一ループへの統合など）に切り替えて再計測します。
+  - 効果の出なかった変更を戻し、計測で残ったボトルネックに合わせて仮説を見直します。
