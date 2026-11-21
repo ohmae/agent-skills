@@ -99,6 +99,16 @@ for (value in values) {
 }
 ```
 
+### 読み取り専用リストへの反復追加
+
+`var items: List<T>` に対する `items += item` は、`plus` で新しいリストを作って再代入します。空から 1 件ずつ N 件を追加すると、既存要素の累積コピーは O(N²) になります。中間結果を公開しない組み立て処理では、初期容量を指定した `ArrayList` や `buildList` を比較します。各段階のリストを利用する呼び出し元がある場合は、スナップショットとしての独立性を維持します。 [Kotlin のコレクション演算子](https://kotlinlang.org/docs/collection-combine.html)
+
+ホットパスで追加件数が増え続ける場合は、累積コピーを優先して調べます。入力サイズを変え、リスト全体を組み立てて使い終えるまでの時間と割り当て量を比較します。
+
+### `withIndex()` を使う走査
+
+Kotlin/JVM 2.4.21 では、`IntArray` に対する `for ((i, x) in xs.withIndex())` は添字ループに変換されます。`xs.withIndex().sumOf { (i, x) -> i * x }` の生成コードにはイテレータが残り、標準ライブラリの実装をたどると要素ごとに `IndexedValue` を生成し、値をボクシングする経路があります。ホットパスでは、受け手の型と `withIndex()` の結果の使い方を確認し、`IntArray.forEachIndexed` や直接のループと比較します。生成コードで見つけた割り当て候補は、対象ランタイムで実行時間と割り当て量をそれぞれ計測します。 [Kotlin の `withIndex()` API](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.collections/with-index.html)
+
 ### コレクションの初期容量
 
 バッファやコレクションを段階的に拡張すると、再割り当てやコピーが起きることがあります。最終サイズを見積もれる場合は `ArrayList(expectedSize)` などで初期容量を指定できます。指定値の意味は API ごとに確認し、見積もりが過大な場合のメモリ使用量も比較します。
@@ -142,6 +152,11 @@ value class PackedPointF(val packed: Long) {
 
 fun doublePointPacked(p: PointF): PackedPointF = PackedPointF(p.x * 2f, p.y * 2f)
 ```
+
+### 列挙値の配列とデータクラスのコピー
+
+- `State.values()` と `enumValues<State>()` は呼び出しごとに全列挙値を含む配列を作ります。読み取りや走査には `State.entries`（Kotlin 1.9 以降）や `enumEntries<State>()`（Kotlin 2.0 以降）を使うと、読み取り専用の一覧を再利用できます。呼び出し側が配列を並べ替えるなど、独立した配列を必要とする場合はその契約を維持します。 [Kotlin の enum クラス](https://kotlinlang.org/docs/enum-classes.html)
+- `state = state.copy(...)` を反復すると、新しいデータクラスのインスタンスを生成する経路を繰り返し通ります。生成される `copy()` は浅いコピーで、プロパティが参照するオブジェクトは共有されます。外部に途中経過を渡さない集計なら、個別の値をローカルで更新し、最後に結果を生成する方法を比較します。 [Kotlin のデータクラス](https://kotlinlang.org/docs/data-classes.html)
 
 ### 可変長引数と配列コピー
 
@@ -199,6 +214,13 @@ fun matchUsers(orders: List<Order>, users: List<User>): List<Pair<Order, User?>>
 ### 呼び出し先で繰り返される処理
 
 比較関数やコールバックに渡した処理は、外側の呼び出しが 1 回でも何度も実行されることがあります。たとえば `compareBy { parseKey(it) }` では、同じ要素のキーも比較のたびに求めます。キー計算に副作用がなく、対象の処理中に結果が変わらないなら、要素ごとに一度だけ計算する方法を候補にします。実際の呼び出し回数を調べ、前処理時間と結果の保持に必要なメモリを含めて比較します。
+
+## 構文や API に隠れた処理
+
+- **プロパティ委譲**。各インスタンスで作る `by lazy` は、プロパティを読まない場合でもデリゲートを生成します。既定モードでは初回初期化に同期があり、`by map` では読み取りごとにプロパティ名で検索します。`by lazy` は初期化処理の重さと、値が一度でも読まれるインスタンスの割合を実際の用途に合わせて比較します。通常の初期化やフィールドへの格納を検討するときは、評価時期、スレッド安全性、元のマップの変更が読み取りに反映されるかを確認します。 [Kotlin の委譲プロパティ](https://kotlinlang.org/docs/delegated-properties.html)
+- **デフォルト引数**。`fun parse(schema: Schema = loadSchema())` では、引数を省略するたびに `loadSchema()` を評価します。呼び出し間で同じ結果を安全に共有できるなら、ループ外で一度求めて明示的に渡す方法を比較します。 [Kotlin 言語仕様](https://kotlinlang.org/spec/expressions.html#function-calls-and-property-access-expressions)
+- **ログの文字列補間**。`debug("items=${items.joinToString()}")` のように `String` を渡すと、ログ関数がレベルを判定する前に走査と文字列化が実行されます。メッセージ生成に必要な処理を、レベルを確認した分岐の内側や遅延評価に対応するログ API に移す方法を比較します。 [Kotlin の文字列テンプレート](https://kotlinlang.org/docs/strings.html) · [Android の Log API](https://developer.android.com/reference/android/util/Log)
+- **失敗が頻出する変換**。`runCatching { text.toInt() }.getOrNull()` は、不正入力のたびに `NumberFormatException` を生成して捕捉します。変換失敗を `null` で扱う用途では `toIntOrNull()` を比較し、代表的な失敗率を計測条件に含めます。 [Kotlin の例外処理](https://kotlinlang.org/docs/exceptions.html)
 
 ## 共有状態の競合
 
