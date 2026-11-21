@@ -2,7 +2,7 @@
 name: kotlin-performance-optimizer
 license: MIT
 description: >-
-  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, improving CPU cache hit rates and memory layout, avoiding counterproductive memoization/caching overhead, fixing O(N^2) collection operations, or reducing boxing and temporary object allocations. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
+  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, improving CPU cache hit rates and memory layout, eliminating redundant memory copies across processing stages, avoiding counterproductive memoization/caching overhead, fixing O(N^2) collection operations, or reducing boxing and temporary object allocations. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
 ---
 
 # Kotlin Performance Optimizer
@@ -44,6 +44,7 @@ Kotlin の計算ロジック、データ処理、処理フローから静的解�
    - キャッシュ非効率なループ順序: 2 次元データ（行列・画像ピクセル・グリッド等）での列方向（ストライド飛び）走査や、複数パスに分かれたループ（Loop Fusion で 1 パスに統合し L1 キャッシュに乗ったまま処理できないか）
    - ポインタチェイシング（Pointer Chasing）: `List<Point>` やネストしたオブジェクト配列の大量走査（プリミティブ配列 `IntArray` / `FloatArray` へのフラット化や Structure of Arrays (SoA) 化ができないか）
    - 逆効果なキャッシュ・メモ化: 再計算コストが低い処理を `Map` / `HashMap` にキャッシュして毎回ボクシングやハッシュ探索（キャッシュミス）を発生させていないか
+   - データフロー上のメモリコピー。ホットパスの入力から最終出力までデータの表現と受け渡しを追い、処理境界での全体・部分コピーや中間バッファへの書き出しを確認します。コピー量、頻度、必要性の見積もり方と削減例は [データフロー上のメモリコピー](./references/anti-patterns.md#データフロー上のメモリコピー) を参照してください。
 2. コレクション・Sequence の中間オブジェクト生成
    - 複数段に連なる `map { ... }.filter { ... }.take(...)` 等による不要な中間 `List` の生成（その都度ヒープ確保とメモリ書き戻しが発生しキャッシュを汚染する）
    - 要素数が既知のコレクション生成における初期容量（Initial Capacity）未指定や、`buildList` / `asSequence()` / ループへの統合余地
@@ -78,10 +79,13 @@ Coroutines / Flow では、ループ内の不要な `withContext` による切�
 - 既存の JUnit テスト環境（`src/test/`）を利用し、外部ライブラリの追加なしで `kotlin.time.measureTime` または `System.nanoTime()` を用いて計測します。
 - JIT コンパイルの影響を排除するため、必ずウォームアップ実行を行ってから複数回の平均値または中央値を記録します。
 - キャッシュの逆転現象（`N` が小さいときと大きいときで有利な実装が変わる現象）が疑われる場合は、現実的なデータサイズ (`N`) で計測します。
+- コピー削減では、変更対象の受け渡しを含む処理経路全体を代表的な入力サイズで計測し、前後の実行時間と入力 1 件あたりのコピー回数・概算データ量を比較します。コピー量をコードから算出した場合は推定値として記録します。
 
 ### 4. コードの修正と正確性の検証
 
 仮説に基づいてコードを修正し、既存のユニットテストがすべて通ることを確認します。エッジケースでの挙動、要素の順序、`null` 安全性、スレッド安全性を維持します。
+
+コピーを削減する場合は、入力を書き換えられるか、結果が入力の後続変更から独立している必要があるか、下流の利用が終わるまでバッファを保持できるかを確認します。
 
 ### 5. 再計測と効果の判定
 
