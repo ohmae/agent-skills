@@ -1,5 +1,6 @@
 ---
 name: kotlin-performance-optimizer
+license: MIT
 description: >-
   Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, improving CPU cache hit rates and memory layout, avoiding counterproductive memoization/caching overhead, fixing O(N^2) collection operations, or reducing boxing and temporary object allocations. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
 ---

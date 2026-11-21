@@ -51,3 +51,7 @@ ln -s "$(pwd)/skills/kotlin-performance-optimizer" ~/.gemini/config/skills/kotli
 2. **検証コード用意**: `playpen/` 配下にスキルの対象となる課題コード（例: 意図的に遅く書いた Kotlin コード）を用意
 3. **スキル適用 & 計測**: スキルの手順に従って静的解析・改善・JUnit 等による簡易計測を実施し、スキルの指示が明確か検証
 4. **バリデーション**: `tools/validate-skills.sh` でフロントマターやファイル構成をチェック
+
+## ライセンス
+
+このリポジトリは [MIT ライセンス](./LICENSE) で公開しています。
