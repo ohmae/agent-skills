@@ -118,7 +118,7 @@ for (value in values) {
 
 ### `withIndex()` を使う走査
 
-Kotlin/JVM 2.4.21 では、`IntArray` に対する `for ((i, x) in xs.withIndex())` は添字ループに変換されます。`xs.withIndex().sumOf { (i, x) -> i * x }` の生成コードにはイテレータが残り、標準ライブラリの実装をたどると要素ごとに `IndexedValue` を生成し、値をボクシングする経路があります。ホットパスでは、受け手の型と `withIndex()` の結果の使い方を確認し、`IntArray.forEachIndexed` や直接のループと比較します。生成コードで見つけた割り当て候補は、対象ランタイムで実行時間と割り当て量をそれぞれ計測します。 [Kotlin の `withIndex()` API](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.collections/with-index.html)
+Kotlin/JVM では、`IntArray` に対する `for ((i, x) in xs.withIndex())` が添字ループに変換されることがあります（2.4.21 で確認）。`xs.withIndex().sumOf { (i, x) -> i * x }` のように集計関数につなげると、イテレータを経由して要素ごとに `IndexedValue` を生成し、値をボクシングする経路が残ることがあります。ホットパスでは、受け手の型と `withIndex()` の結果の使い方を確認し、`IntArray.forEachIndexed` や直接のループと比較します。生成コードは対象のコンパイラで確認し、実行時間と割り当て量は対象ランタイムでそれぞれ計測します。 [Kotlin の `withIndex()` API](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.collections/with-index.html)
 
 ### コレクションの初期容量
 
@@ -260,7 +260,7 @@ fun matchUsers(orders: List<Order>, users: List<User>): List<Pair<Order, User?>>
 
 ## 構文や API に隠れた処理
 
-- **プロパティ委譲**。各インスタンスで作る `by lazy` は、プロパティを読まない場合でもデリゲートを生成します。既定モードでは初回初期化に同期があり、`by map` では読み取りごとにプロパティ名で検索します。`by lazy` は初期化処理の重さと、値が一度でも読まれるインスタンスの割合を実際の用途に合わせて比較します。通常の初期化やフィールドへの格納を検討するときは、評価時期、スレッド安全性、元のマップの変更が読み取りに反映されるかを確認します。 [Kotlin の委譲プロパティ](https://kotlinlang.org/docs/delegated-properties.html)
+- **プロパティ委譲**。各インスタンスで作る `by lazy` は、プロパティを読まない場合でもデリゲートを生成します。既定モードでは初回初期化に同期があり、`by map` では読み取りごとにプロパティ名で検索します。`by lazy` は初期化処理の重さと、値が一度でも読まれるインスタンスの割合を実際の用途に合わせて比較します。遅延初期化を維持し、初期化とその後のアクセスが同じスレッドに限られると確認できる場合は、`by lazy(LazyThreadSafetyMode.NONE) { ... }` で同期を省く方法も比較します。通常の初期化やフィールドへの格納を検討するときは、評価時期、スレッド安全性、元のマップの変更が読み取りに反映されるかを確認します。 [Kotlin の委譲プロパティ](https://kotlinlang.org/docs/delegated-properties.html) · [`LazyThreadSafetyMode.NONE`](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin/-lazy-thread-safety-mode/-n-o-n-e/)
 - **デフォルト引数**。`fun parse(schema: Schema = loadSchema())` では、引数を省略するたびに `loadSchema()` を評価します。呼び出し間で同じ結果を安全に共有できるなら、ループ外で一度求めて明示的に渡す方法を比較します。 [Kotlin 言語仕様](https://kotlinlang.org/spec/expressions.html#function-calls-and-property-access-expressions)
 - **ログの文字列補間**。`debug("items=${items.joinToString()}")` のように `String` を渡すと、ログ関数がレベルを判定する前に走査と文字列化が実行されます。メッセージ生成に必要な処理を、レベルを確認した分岐の内側や遅延評価に対応するログ API に移す方法を比較します。 [Kotlin の文字列テンプレート](https://kotlinlang.org/docs/strings.html) · [Android の Log API](https://developer.android.com/reference/android/util/Log)
 - **失敗が頻出する変換**。`runCatching { text.toInt() }.getOrNull()` は、不正入力のたびに `NumberFormatException` を生成して捕捉します。変換失敗を `null` で扱う用途では `toIntOrNull()` を比較し、代表的な失敗率を計測条件に含めます。 [Kotlin の例外処理](https://kotlinlang.org/docs/exceptions.html)
@@ -269,10 +269,10 @@ fun matchUsers(orders: List<Order>, users: List<User>): List<Pair<Order, User?>>
 
 ホットループでは、時計の読み取り回数と、取得した値を `Instant` やエポックミリ秒に変換する経路を確認します。たとえば期限切れの一括判定で「バッチ開始時点」が基準なら、`items.count { it.expiresAt <= Clock.System.now() }` の時刻取得を外に出し、先頭で取得した `now` を使います。判定基準の直前、ちょうど、直後に期限がある項目で結果を確認します。処理の途中でタイムアウトを検出する必要がある場合は、許容できる検出の遅れに合わせて時計を読み直します。
 
-- 記録や絶対時刻での期限判定には `Clock.System.now()` や `System.currentTimeMillis()` を使います。端末の時刻補正で値が前後することがあります。 [Kotlin の `Clock.System`](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.time/-clock/-system/)
-- 経過時間の計測には `kotlin.time.measureTime` や `System.nanoTime()` を使います。Android でディープスリープを含める場合は `SystemClock.elapsedRealtime()` または `elapsedRealtimeNanos()` を使います。開始と終了は同じ時計で読み、単位をそろえます。 [Kotlin の時間計測](https://kotlinlang.org/docs/time-measurement.html) · [Android の `SystemClock`](https://developer.android.com/reference/android/os/SystemClock)
+- 記録や絶対時刻での期限判定には `Clock.System.now()` や `System.currentTimeMillis()` を使います。端末の時刻補正で値が前後することがあります。ホットループで `Clock.System.now()` を繰り返す場合は、時計の読み取りに加えて `Instant` の生成が割り当て負荷になることがあります。エポックミリ秒の精度で足り、`Long` のまま判定できる場合は、`System.currentTimeMillis()` を使う経路も比較します。 [Kotlin の `Clock.System`](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.time/-clock/-system/) · [Android の `SystemClock`](https://developer.android.com/reference/android/os/SystemClock)
+- 経過時間の計測には単調時計を使います。Android の `System.nanoTime()`（Kotlin/JVM の `kotlin.time.measureTime` の既定の時計）はディープスリープ中に進みません。ディープスリープを含める場合は、その間も進む `SystemClock.elapsedRealtime()` または `elapsedRealtimeNanos()` を使います。開始と終了は同じ時計で読み、単位をそろえます。 [Kotlin の時間計測](https://kotlinlang.org/docs/time-measurement.html) · [Android の `SystemClock`](https://developer.android.com/reference/android/os/SystemClock)
 
-複数の Android 実機で同じ期限判定を計測したところ、時刻の取得とエポックミリ秒への変換をバッチごとに一度にまとめると、いずれも処理時間が短くなりました。時計は用途に合わせて選び、取得と変換の回数を減らせるかを先に確認します。効果は代表的なバッチサイズで処理全体を比較して判断します。
+時計は用途に合わせて選び、取得と変換の回数を減らせるかを先に確認します。変更前後で処理全体の時間と割り当て量を、実際の用途を代表するバッチサイズで比較します。
 
 ## 共有状態の競合
 
