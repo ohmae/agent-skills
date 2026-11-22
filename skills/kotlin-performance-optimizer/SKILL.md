@@ -2,7 +2,7 @@
 name: kotlin-performance-optimizer
 license: MIT
 description: >-
-  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, and processing flows (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, inefficient algorithms or data access, redundant memory copies across processing stages, counterproductive memoization, or allocation and boxing overhead. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
+  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, processing flows, and Android frame-driven animation/drawing hot paths (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, inefficient algorithms or data access, redundant memory copies across processing stages, counterproductive memoization, allocation and boxing overhead, or per-frame animation loop, threading, and Canvas/graphics object overhead. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
 ---
 
 # Kotlin Performance Optimizer
@@ -24,9 +24,10 @@ Big-O が同じでも、CPU キャッシュに収まる連続走査と、キャ�
 
 ## 対象範囲
 
-- 対象: Kotlin で書かれた計算ロジック、メモリアクセスパターン、コレクション操作、アルゴリズム・データ構造、メモリ割り当て（Allocation / Boxing）、および基本的な Coroutines 処理フロー。
+- 対象: Kotlin で書かれた計算ロジック、メモリアクセスパターン、コレクション操作、アルゴリズム・データ構造、メモリ割り当て（Allocation / Boxing）、基本的な Coroutines 処理フロー、および Android のアニメーションループ・フレーム単位の更新計算・描画ホットパスにおけるスレッドやグラフィックコンテキスト（`Canvas` / `Paint` / `Path` 等）の扱い。
 - 対象外（外部スキルへ委譲）:
-  - Jetpack Compose の再コンポーズや UI カクつき → `jetpack-compose-performance` 等を使用
+  - Jetpack Compose の再コンポーズや UI レイアウト構築 → `jetpack-compose-performance` 等を使用
+  - XML レイアウト階層の描画・レイアウト計測の最適化 → 専用 UI 最適化手法を使用
   - Perfetto トレースやシステム全体の詳細なプロファイリング → `android-profiler` / `perfetto-trace-analysis` 等を使用
 
 ## ワークフロー
@@ -72,6 +73,8 @@ Big-O が同じでも、CPU キャッシュに収まる連続走査と、キャ�
 
 並行処理では、[共有状態の競合](./references/anti-patterns.md#共有状態の競合)（ロック競合および同一キャッシュライン上の偽共有）を実際の並行度で確認します。Coroutines / Flow では、切り替え・タスク生成の負荷、繰り返す collect による上流処理の再実行、[生成側と消費側の速度差による滞留](./references/anti-patterns.md#coroutines--flow-のオーバーヘッド) も確認します。
 
+Android のアニメーションやフレーム駆動処理（`Choreographer`、`ValueAnimator`、`withFrameNanos`、`onDraw`、`SurfaceView` 等）が含まれる場合は、[Android アニメーション・フレーム駆動処理の最適化](./references/android-animation.md) を参照し、VSync 同期と `dt` の扱い、毎フレームのゼロアロケーション、スレッド間のダブルバッファ受け渡し、`Paint` / `Path` / `Matrix` / `Shader` / `Bitmap` などグラフィックコンテキスト・描画リソースの再利用と GPU パイプライン負荷を確認します。
+
 ### 2. 改善仮説の整理
 
 検出した各ボトルネックについて、箇所、原因、改善仮説を整理します。提案のみを求められた場合はここで提示し、修正も求められた場合はベースライン計測へ進みます。
@@ -88,7 +91,7 @@ Big-O が同じでも、CPU キャッシュに収まる連続走査と、キャ�
 詳細な計測手順と JUnit ハーネスのテンプレートは [references/micro-benchmarking.md](./references/micro-benchmarking.md) を参照してください。
 
 - 既存のベンチマーク環境があれば活用します。手軽な JVM 計測には既存の JUnit テスト環境で `kotlin.time.measureTime` や `System.nanoTime()` を使えます。実機やランタイムに依存する仮説は対象環境で確認します。
-- 定常状態の比較ではウォームアップ後に繰り返し計測し、中央値などを記録します。初回実行が問題の場合は、その条件を再現して別途計測します。
+- 定常状態の比較ではウォームアップ後に繰り返し計測し、中央値などを記録します。初回実行が問題の場合は、その条件を再現して別途計測します。フレーム駆動処理では中央値に加え、フレームバジェット（60Hz で 16.6ms / 120Hz で 8.3ms）に対する p95 / p99・最大値（テールレイテンシ）とフレームあたりの割り当て量を確認します（[フレーム処理の計測と検証の切り分け](./references/android-animation.md#フレーム処理の計測と検証の切り分け)）。
 - 短い処理は複数回まとめて計測し、1 回あたりに換算します。 [簡易計測の条件](./references/micro-benchmarking.md#計測条件)
 - 実行時間と割り当て量を別々に判定します。実機で割り当ての観測が揺れる場合や、複数端末の結果を比較する場合は、[実機計測の読み方](./references/micro-benchmarking.md#実機計測の読み方)を参照してください。
 - 実際の入力サイズ・分布・アクセス順序を再現します。負荷によって結果が変わりそうな場合は、代表的な条件を複数比較します。

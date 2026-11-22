@@ -48,3 +48,7 @@ grep -rnE --include="*.kt" '(Clock\.System\.now\(|System\.currentTimeMillis\(|Sy
 echo ""
 echo "[9] 文字列の部分処理連鎖候補 (substring / trim / lowercase / uppercase / replace):"
 grep -rnE --include="*.kt" '\.(substring|trim|lowercase|uppercase|replace)\([^)]*\)\s*\.(substring|trim|lowercase|uppercase|replace)\(' "$TARGET_DIR" || echo "  (none found)"
+
+echo ""
+echo "[10] アニメーションループ・描画ホットパスの候補 (postDelayed / saveLayer / createBitmap / setPixel / Gradient / lockCanvas):"
+grep -rnE --include="*.kt" '(postDelayed\(|\.saveLayer\(|createBitmap\(|\.setPixel\(|(Linear|Radial|Sweep)Gradient\(|\.lock(Hardware)?Canvas\()' "$TARGET_DIR" || echo "  (none found)"
