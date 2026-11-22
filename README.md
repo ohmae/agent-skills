@@ -7,21 +7,22 @@
 
 ### kotlin-performance-optimizer
 
-Android / JVM 上の Kotlin の計算、データ処理、フレーム更新・描画のボトルネックを調べ、修正の効果を計測します。ステータスは開発中です。[SKILL.md](./skills/kotlin-performance-optimizer/SKILL.md)
+Android / JVM 上の Kotlin の計算、データ処理、フレーム更新・描画のボトルネックを調べ、修正の効果を計測します。[SKILL.md](./skills/kotlin-performance-optimizer/SKILL.md)
 
 ## インストール
 
 ### `npx skills` で追加する
 
 ```bash
-npx skills add ohmae/agent-skills
+npx skills add ohmae/agent-skills --skill kotlin-performance-optimizer
 ```
 
 ### シンボリックリンクで登録する
 
-Antigravity のグローバルスキルとして登録する例です。
+Antigravity のグローバルスキルとして登録する例です。このリポジトリをクローンし、リポジトリのルートで実行します。
 
 ```bash
+mkdir -p ~/.gemini/config/skills
 ln -s "$(pwd)/skills/kotlin-performance-optimizer" ~/.gemini/config/skills/kotlin-performance-optimizer
 ```
 
@@ -34,7 +35,17 @@ ln -s "$(pwd)/skills/kotlin-performance-optimizer" ~/.gemini/config/skills/kotli
 
 設計方針とディレクトリごとの規約は開発ガイドラインを参照してください。[AGENTS.md](./AGENTS.md)
 
-Kotlin スキルの検証用プロジェクトは [kotlin-perf-sandbox](./playpen/kotlin-perf-sandbox/) にあります。ワークスペースでは [skills.json](./.agents/skills.json) で `skills/` を登録しています。
+ワークスペースでは [skills.json](./.agents/skills.json) で `skills/` を登録しています。
+
+### Kotlin スキルの検証用プロジェクト
+
+[kotlin-perf-sandbox](./playpen/kotlin-perf-sandbox/) のテストと簡易計測を実行するには、JDK 21 と Gradle（9.9.2 で確認）を用意し、リポジトリのルートで次を実行します。`--rerun` を付けると、ソースに変更がなくても `test` タスクが実行され、計測結果が標準出力に表示されます。
+
+```bash
+gradle -p playpen/kotlin-perf-sandbox test --rerun
+```
+
+Qiita 記事の実験を再計測する場合は、`kotlin-perf-sandbox` を IDE で開き、テストソースの [BenchmarkMain.kt](./playpen/kotlin-perf-sandbox/src/test/kotlin/com/example/perf/BenchmarkMain.kt) の `main` を実行します。
 
 ## ライセンス
 
