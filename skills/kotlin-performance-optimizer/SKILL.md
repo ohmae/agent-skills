@@ -2,112 +2,54 @@
 name: kotlin-performance-optimizer
 license: MIT
 description: >-
-  Optimizes Kotlin calculation logic, memory access patterns (CPU cache locality), data structures, collections, processing flows, and Android frame-driven animation/drawing hot paths (primarily for Android and JVM) through static code analysis, hypothesis-driven refactoring, and lightweight benchmarking loops. Use this skill when analyzing Kotlin code for CPU or memory bottlenecks, inefficient algorithms or data access, redundant memory copies across processing stages, counterproductive memoization, allocation and boxing overhead, or per-frame animation loop, threading, and Canvas/graphics object overhead. Don't use for Jetpack Compose UI recomposition issues, XML layout rendering, or deep Perfetto system trace analysis.
+  Diagnose and optimize Kotlin hot paths on Android and JVM. Use for CPU or allocation bottlenecks in computation, data processing, collections, Coroutines and Flow, or Android frame updates and drawing. Prioritize memory access and CPU cache locality, and verify changes with benchmarks. Use dedicated tools for Compose recomposition, UI layout, and detailed Perfetto trace analysis.
 ---
 
 # Kotlin Performance Optimizer
 
-Kotlin の計算ロジック、データ処理、処理フローから静的解析でボトルネックの候補を特定します。仮説に基づいて修正し、簡易計測で効果を検証します。
+呼び出し頻度と 1 回あたりのコストを見積もり、対象の負荷に大きく寄与する処理を特定します。まずデータ配置、走査順序、処理境界でのコピーを確認します。計算量が同じ実装でも、連続走査と参照をたどる走査では、キャッシュミスによる待ち時間が変わります。C/C++ への移植を検討する前に、Kotlin 側のコピーやボクシングを減らす効果を計測します。
 
-## 最適化の原則
+UI レイアウトや Jetpack Compose の再コンポーズは UI 性能の専用手法で調べます。Perfetto トレースやシステム全体の詳細な解析には、利用可能であれば `android-profiler` や `perfetto-trace-analysis` を使います。
 
-Big-O が同じでも、CPU キャッシュに収まる連続走査と、キャッシュミスを繰り返す間接参照では、メモリを待つ時間が変わります。演算が軽い処理ほど、データ配置とアクセス順序を優先して確認します。C/C++ への移植を検討する前に、Kotlin の処理経路にある不要なコピーとボクシングを特定し、削減効果を計測します。
+## 1. 対象コードを調べる
 
-1. ホットパスへの集中
-   - 呼び出し頻度と 1 回あたりのコストから、対象の負荷に大きく寄与する処理を特定します。コピーやボクシングのほか、計算、探索、同期なども候補に含めます。
-2. メモリアクセス順序とデータ配置
-   - ポインタチェイシング（Pointer Chasing）やランダムアクセスが負荷になっている場合は、連続走査や近くのデータをまとめて処理できる順序・配置を検討します。
-3. メモ化のコスト
-   - 保存済みの結果を探して読み出すコストが再計算を上回る場合、メモ化は逆効果です。ヒット時の読み出しに加え、ミス時の再計算と結果の格納も含めて判断します。
-4. データサイズと定数倍のコスト
-   - 入力の規模や分布によって有利な実装は変わります。たとえば検索回数が少ない場合、索引を作るより既存の配列を走査する方が速いことがあります。
+対象のモジュールを読み、ホットパスの入力から出力まで、データの表現と呼び出し経路を追います。[パフォーマンス上の問題と対策](./references/anti-patterns.md) の該当箇所を、次の順で確認します。
 
-## 対象範囲
+1. **メモリアクセスとコピー**。ストライドの大きい走査、参照追跡、同じデータの再走査を確認します。メモ化では、ヒット時の読み出しとミス時の再計算・格納を含めて、直接計算する場合と比較します。[メモリアクセスと CPU キャッシュ局所性](./references/anti-patterns.md#メモリアクセスと-cpu-キャッシュ局所性) · [データフロー上のメモリコピー](./references/anti-patterns.md#データフロー上のメモリコピー)
+2. **コレクション、割り当て、アルゴリズム**。多段操作の中間結果、ボクシング、高頻度のオブジェクト生成、反復探索やソートを確認します。索引を使う場合は、構築や更新も含めて比較します。[コレクションと Sequence](./references/anti-patterns.md#コレクションと-sequence) · [ボクシングとオブジェクト割り当て](./references/anti-patterns.md#ボクシングとオブジェクト割り当て) · [アルゴリズムとデータ構造](./references/anti-patterns.md#アルゴリズムとデータ構造)
+3. **呼び出し先と並行処理**。構文や API に隠れた処理、時刻取得の繰り返し、共有状態の競合を確認します。Coroutines / Flow では、切り替えやタスク生成、上流処理の再実行、処理待ちの滞留を確認します。[構文や API に隠れた処理](./references/anti-patterns.md#構文や-api-に隠れた処理) · [時刻取得の繰り返し](./references/anti-patterns.md#時刻取得の繰り返し) · [共有状態の競合](./references/anti-patterns.md#共有状態の競合) · [Coroutines / Flow](./references/anti-patterns.md#coroutines--flow-のオーバーヘッド)
 
-- 対象: Kotlin で書かれた計算ロジック、メモリアクセスパターン、コレクション操作、アルゴリズム・データ構造、メモリ割り当て（Allocation / Boxing）、基本的な Coroutines 処理フロー、および Android のアニメーションループ・フレーム単位の更新計算・描画ホットパスにおけるスレッドやグラフィックコンテキスト（`Canvas` / `Paint` / `Path` 等）の扱い。
-- 対象外（外部スキルへ委譲）:
-  - Jetpack Compose の再コンポーズや UI レイアウト構築 → `jetpack-compose-performance` 等を使用
-  - XML レイアウト階層の描画・レイアウト計測の最適化 → 専用 UI 最適化手法を使用
-  - Perfetto トレースやシステム全体の詳細なプロファイリング → `android-profiler` / `perfetto-trace-analysis` 等を使用
+Android のアニメーション、フレーム更新、カスタム描画を扱う場合は、VSync との同期、フレーム単位の割り当て、スレッド間の受け渡し、描画リソースの使い方を確認します。[Android アニメーション・フレーム駆動処理の最適化](./references/android-animation.md)
 
-## ワークフロー
+### 補助スクリプトで候補を探す
 
-ユーザーの要求（「どこが遅いか診断してほしい」または「この処理・ファイルを高速化してほしい」）に応じて、以下の 5 ステップを実行します。
+スキルのディレクトリで、対象モジュールのディレクトリを指定して実行します。Bash と `--include` に対応する `grep` が必要です。
 
-### 1. 対象コードの特定と静的解析
+```bash
+./scripts/scan-kotlin-hotspots.sh /path/to/module
+```
 
-対象のファイルまたはモジュールを読み込み、[references/anti-patterns.md](./references/anti-patterns.md) のカタログおよび必要に応じた検索スクリプト（[scripts/scan-kotlin-hotspots.sh](./scripts/scan-kotlin-hotspots.sh)）を用いてボトルネック候補を洗い出します。
+引数を省略すると、カレントディレクトリを検索します。`*.kt` を再帰的に検索し、一致したファイル名、行番号、行の内容をパターン別に表示します。候補がない場合は `(none found)` を表示し、検索を完了すれば終了コードは 0 です。存在しないディレクトリや検索エラーでは 0 以外で終了します。
 
-次の項目を優先して確認します。カタログと検索結果は調査の手がかりです。スクリプトが拾いにくい複数行の処理、独自 API、呼び出し先に隠れた処理も、実際のデータフローに沿って確認します。
+コメントや文字列も一致し、複数行に分かれた操作や独自 API は見落とすことがあります。結果を手がかりに、実際の呼び出し頻度や型、呼び出し先の実装を確認します。
 
-1. メモリアクセスパターンと CPU キャッシュ局所性（Cache Locality）
-   - データ配置に対してストライドが大きい走査や、同じ範囲を繰り返し読み書きする処理。走査順序やループ統合の例は [メモリアクセスと CPU キャッシュ局所性](./references/anti-patterns.md#メモリアクセスと-cpu-キャッシュ局所性) を参照してください。
-   - [分岐予測とループ不変条件](./references/anti-patterns.md#分岐予測とループ不変条件): ホットループ内の不変計算・不変フラグ分岐、ランダム分布に対する条件分岐の予測ミス。
-   - ポインタチェイシング（Pointer Chasing）: `List<Point>` やネストしたオブジェクト配列の大量走査（プリミティブ配列 `IntArray` / `FloatArray` へのフラット化や Structure of Arrays (SoA) 化ができないか）
-   - メモ化。保存済みの結果を取得する際のメモリアクセスや同期の負荷を確認します。評価方法は [メモ化のコスト](./references/anti-patterns.md#メモ化のコスト) を参照してください。
-   - データフロー上のメモリコピー。ホットパスの入力から最終出力までデータの表現と受け渡しを追い、処理境界での全体・部分コピーや中間バッファへの書き出しを確認します。コピー量、頻度、必要性の見積もり方と削減例は [データフロー上のメモリコピー](./references/anti-patterns.md#データフロー上のメモリコピー) を参照してください。一方で、JNI 境界などを 1 要素ずつ跨ぐ処理では [呼び出し境界の回数と一括コピー](./references/anti-patterns.md#呼び出し境界の回数と一括コピー) のトレードオフも確認します。
-2. コレクション・Sequence の中間オブジェクト生成とデータ構造選択
-   - 多段処理での中間結果の実体化や、結果を使わない要素まで走査する箇所。たとえば `map { ... }.filter { ... }.take(...)` を確認します。
-   - 要素ごとの処理が軽く、全件走査するホットパスでは、走査を 1 回にまとめる標準 API や単一ループを先に比較します。途中で打ち切れる場合や中間リストが大きい場合は `Sequence` も候補にします。
-   - 要素数が既知のコレクション生成における初期容量（Initial Capacity）未指定。
-   - 要素やキーがボクシングされる構造。キーの分布や操作に応じて、プリミティブ配列や `IntIntMap` などの専用構造を候補にします。
-   - [読み取り専用リストへの反復追加](./references/anti-patterns.md#読み取り専用リストへの反復追加)では累積コピーを、[`withIndex()` を使う走査](./references/anti-patterns.md#withindex-を使う走査)では要素ごとのラッパー生成やボクシングを確認します。
-   - [先頭操作とキューのデータ構造](./references/anti-patterns.md#先頭操作とキューのデータ構造)（`ArrayList` の先頭削除や `LinkedList` に対する `ArrayDeque`）、および [ビット集合によるフラグ・狭い整数集合の圧縮](./references/anti-patterns.md#ビット集合によるフラグ狭い整数集合の圧縮) を確認します。
-3. ボクシングと不要なオブジェクト割り当て・配列コピー（Allocation / GC 負荷）
-   - 呼び出しごとに生成される結果オブジェクトや一時オブジェクト（例として `Pair` やデータクラス）。対象ランタイムでの割り当てを確認します。
-   - 処理後も参照が残るデータ。コピーを省く変更では、割り当て量と [保持メモリ](./references/anti-patterns.md#割り当て量と保持メモリ) を別々に確認します。
-   - 可変長引数（`vararg`）とスプレッド演算子（`*array`）に伴う暗黙の配列生成・コピー。
-   - ホットループ内での `Regex(...)`, `SimpleDateFormat`, `Gson`/`Json` インスタンスの都度生成
-   - Nullable プリミティブ（`Int?`, `Long?`）やジェネリクス境界によるオートボクシング、高階関数の `inline` 化、[キャプチャするラムダとクロージャ生成](./references/anti-patterns.md#キャプチャするラムダとクロージャ生成)（特に `var` キャプチャに伴う `Ref` 割り当て）
-   - [列挙値の配列とデータクラスのコピー](./references/anti-patterns.md#列挙値の配列とデータクラスのコピー)では、高頻度の呼び出しで発生する配列やインスタンスの生成を確認します。
-4. アルゴリズムとデータ構造の非効率 (`O(N^2)` 等)
-   - データ量と検索回数の積でコストが増える反復探索。標準コレクションの `find` などに加え、独自の検索関数の実装も確認します。
-   - ネストされたループでの線形探索、[文字列の連結と部分処理](./references/anti-patterns.md#文字列の連結と部分処理)（ループ内の `+=` や `substring`/`trim`/`lowercase` の連鎖）、毎回のソート（`sortedBy`）
-   - 索引の構築・更新と検索を合わせた総コストを、走査を繰り返す場合と比較します。
-   - [Map / Set のキー設計と `equals` / `hashCode`](./references/anti-patterns.md#map--set-のキー設計と-equals--hashcode) で、大きなオブジェクトキーによる比較・ハッシュ計算の負荷を確認します。
-   - 比較関数やコールバックの中で [高コストな処理を繰り返す箇所](./references/anti-patterns.md#呼び出し先で繰り返される処理)。1 回あたりの時間と呼び出し回数を確認します。
+## 2. 改善仮説を立てる
 
-[構文や API に隠れた処理](./references/anti-patterns.md#構文や-api-に隠れた処理)として、プロパティ委譲、デフォルト引数、ログの文字列補間、失敗が頻出する変換も確認します。
+候補ごとに、箇所、負荷が生じる条件、改善案を整理します。コピー量と頻度、計算量と入力規模など、効果を見積もる根拠を示します。可読性やメモリ使用量に影響する場合は、採用条件も添えます。診断や提案の依頼では、静的解析で得た仮説と、計測で確認できた事実を区別して報告します。
 
-[時刻取得の繰り返し](./references/anti-patterns.md#時刻取得の繰り返し)では、時計の用途と呼び出し回数を確認します。同じ基準時刻で判定できる範囲では、その範囲の先頭で一度取得する方法を比較します。
+## 3. 変更前の値を測る
 
-並行処理では、[共有状態の競合](./references/anti-patterns.md#共有状態の競合)（ロック競合および同一キャッシュライン上の偽共有）を実際の並行度で確認します。Coroutines / Flow では、切り替え・タスク生成の負荷、繰り返す collect による上流処理の再実行、[生成側と消費側の速度差による滞留](./references/anti-patterns.md#coroutines--flow-のオーバーヘッド) も確認します。
+実際の入力サイズ・分布・アクセス順序を再現し、仮説に合う区間を測ります。既存の計測環境を活用し、手軽な JVM 計測には JUnit で `kotlin.time.measureTime` や `System.nanoTime()` を使います。ウォームアップ、短い処理の反復、統計値の取り方は [JUnit による簡易計測](./references/micro-benchmarking.md) を参照してください。
 
-Android のアニメーションやフレーム駆動処理（`Choreographer`、`ValueAnimator`、`withFrameNanos`、`onDraw`、`SurfaceView` 等）が含まれる場合は、[Android アニメーション・フレーム駆動処理の最適化](./references/android-animation.md) を参照し、VSync 同期と `dt` の扱い、毎フレームのゼロアロケーション、スレッド間のダブルバッファ受け渡し、`Paint` / `Path` / `Matrix` / `Shader` / `Bitmap` などグラフィックコンテキスト・描画リソースの再利用と GPU パイプライン負荷を確認します。
+- コピー削減では、対象の受け渡しを含む経路全体を測り、入力 1 件あたりのコピー回数とデータ量も記録します。コードから算出した量は推定値として記録します。
+- ランタイムに依存する割り当てや、実機でのフレーム締め切りは対象環境で確認します。[実機計測の読み方](./references/micro-benchmarking.md#実機計測の読み方) · [フレーム処理の計測と検証の切り分け](./references/android-animation.md#フレーム処理の計測と検証の切り分け)
 
-### 2. 改善仮説の整理
+## 4. 修正して既存の挙動を検証する
 
-検出した各ボトルネックについて、箇所、原因、改善仮説を整理します。提案のみを求められた場合はここで提示し、修正も求められた場合はベースライン計測へ進みます。
+仮説に基づいて修正し、既存のテストと同じ入力に対する出力比較で挙動を確認します。要素の順序、`null` や空入力、例外、スレッド安全性など、変更の影響を受ける条件を確認します。
 
-- 箇所: ファイル名と行番号、対象メソッド
-- 問題（なぜ遅いか）:
-  - メモリアクセス / キャッシュ効率の観点: ポインタ参照回数、キャッシュラインの利用効率、ヒープアロケーション回数、キャッシュルックアップのオーバーヘッド
-  - 計算量の観点: 時間計算量（例: `O(N × M)`）およびデータサイズ `N` に対する定数倍コスト
-- 改善仮説: どの手法でメモリアクセス効率の改善・アロケーション削減・計算量削減を行うか、およびトレードオフ（可読性やメモリ使用量など）
+コピーを省く場合は、入力を変更できるか、結果の独立性が必要か、利用が終わるまでバッファを保持できるかを確認します。[データフロー上のメモリコピー](./references/anti-patterns.md#データフロー上のメモリコピー)
 
-### 3. ベースライン計測
+## 5. 再計測して効果を判定する
 
-コードを変更する前に、現在の処理速度を確認するための軽量ベンチマークテストを作成・実行します。
-詳細な計測手順と JUnit ハーネスのテンプレートは [references/micro-benchmarking.md](./references/micro-benchmarking.md) を参照してください。
-
-- 既存のベンチマーク環境があれば活用します。手軽な JVM 計測には既存の JUnit テスト環境で `kotlin.time.measureTime` や `System.nanoTime()` を使えます。実機やランタイムに依存する仮説は対象環境で確認します。
-- 定常状態の比較ではウォームアップ後に繰り返し計測し、中央値などを記録します。初回実行が問題の場合は、その条件を再現して別途計測します。フレーム駆動処理では中央値に加え、フレームバジェット（60Hz で 16.6ms / 120Hz で 8.3ms）に対する p95 / p99・最大値（テールレイテンシ）とフレームあたりの割り当て量を確認します（[フレーム処理の計測と検証の切り分け](./references/android-animation.md#フレーム処理の計測と検証の切り分け)）。
-- 短い処理は複数回まとめて計測し、1 回あたりに換算します。 [簡易計測の条件](./references/micro-benchmarking.md#計測条件)
-- 実行時間と割り当て量を別々に判定します。実機で割り当ての観測が揺れる場合や、複数端末の結果を比較する場合は、[実機計測の読み方](./references/micro-benchmarking.md#実機計測の読み方)を参照してください。
-- 実際の入力サイズ・分布・アクセス順序を再現します。負荷によって結果が変わりそうな場合は、代表的な条件を複数比較します。
-- コピー削減では、変更対象の受け渡しを含む処理経路全体を代表的な入力サイズで計測し、前後の実行時間と入力 1 件あたりのコピー回数・概算データ量を比較します。コピー量をコードから算出した場合は推定値として記録します。
-
-### 4. コードの修正と正確性の検証
-
-仮説に基づいてコードを修正し、既存のユニットテストがすべて通ることを確認します。エッジケースでの挙動、要素の順序、`null` 安全性、スレッド安全性を維持します。
-
-コピーを削減する場合は、入力を書き換えられるか、結果が入力の後続変更から独立している必要があるか、下流の利用が終わるまでバッファを保持できるかを確認します。
-
-### 5. 再計測と効果の判定
-
-ベースラインと同じ条件で簡易計測を実行し、変更前後の結果を比較します。
-
-- 改善が確認できた場合: 短縮された時間（ms / ns）と改善倍率（または削減率 %）をレポートにまとめます。レポートの構成例は [examples/optimization-report.md](./examples/optimization-report.md) を参照してください。
-- 改善が見られない・悪化した場合（特にキャッシュ導入やデータ構造変更時）:
-  - メモ化で削減した計算時間を、結果の取得・格納の負荷が上回っていないか確認します。`Sequence` の導入では、イテレータやボクシングの負荷を確認します。
-  - 効果の出なかった変更を戻し、計測で残ったボトルネックに合わせて仮説を見直します。
+変更前と同じ条件で測り、実行時間と割り当て量をそれぞれ比較します。効果が確認できた場合は、変更前後の値、短縮時間と改善倍率または削減率、計測条件を報告します。効果が出ない場合は、メモ化の検索や格納、`Sequence` のイテレータやボクシングなど、変更で増えたコストを確認します。効果の出なかった変更を戻し、計測結果に沿って仮説を見直します。[最適化レポートの出力例](./examples/optimization-report.md)

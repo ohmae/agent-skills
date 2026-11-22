@@ -7,7 +7,7 @@
 
 ### kotlin-performance-optimizer
 
-Android / JVM を中心に、Kotlin の計算ロジックや処理フローのボトルネックを静的解析で絞り込み、仮説に基づく修正の効果を簡易計測で確かめます。ステータスは開発中です。[SKILL.md](./skills/kotlin-performance-optimizer/SKILL.md)
+Android / JVM 上の Kotlin の計算、データ処理、フレーム更新・描画のボトルネックを調べ、修正の効果を計測します。ステータスは開発中です。[SKILL.md](./skills/kotlin-performance-optimizer/SKILL.md)
 
 ## インストール
 
@@ -30,16 +30,11 @@ ln -s "$(pwd)/skills/kotlin-performance-optimizer" ~/.gemini/config/skills/kotli
 1. `skills/<skill-name>/SKILL.md` と必要な参照資料を作成します。
 2. `playpen/` にスキルの手順を試せる課題コードを用意します。
 3. スキルの手順に沿って課題コードを解析・改善し、テストや簡易計測で効果と手順の明確さを確認します。
-4. `tools/validate-skills.sh` でフロントマターとファイル構成を検証します。
+4. リポジトリのルートで `./tools/validate-skills.sh` を実行します。`skills/` 直下の各ディレクトリで、`SKILL.md` の有無と、先頭のフロントマターにディレクトリ名と一致する `name` 行および `description` 行があることを確認します。
 
 設計方針とディレクトリごとの規約は開発ガイドラインを参照してください。[AGENTS.md](./AGENTS.md)
 
-### ディレクトリ構成
-
-- `skills/` に公開スキルを置きます。各スキルは `SKILL.md` と、必要に応じて参照資料や補助スクリプトを持ちます。
-- `playpen/` にスキルの検証用プロジェクトを置きます。Kotlin スキルの検証には `playpen/kotlin-perf-sandbox/` を使います。
-- `tools/` にリポジトリの保守・検証用スクリプトを置きます。
-- `.agents/skills.json` はこのワークスペースで `skills/` を認識させるための設定です。
+Kotlin スキルの検証用プロジェクトは [kotlin-perf-sandbox](./playpen/kotlin-perf-sandbox/) にあります。ワークスペースでは [skills.json](./.agents/skills.json) で `skills/` を登録しています。
 
 ## ライセンス
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Kotlin コードベースからパフォーマンス劣化の典型的な候補箇所を素早くスキャンする補助スクリプト
-# 使い方: ./scan-kotlin-hotspots.sh <target_directory>
+# Kotlin のパフォーマンス上の問題につながり得る記述を検索します。
+# 使い方: ./scan-kotlin-hotspots.sh [target_directory]
 
 set -euo pipefail
 
@@ -11,44 +11,43 @@ if [ ! -d "$TARGET_DIR" ]; then
   exit 1
 fi
 
+scan() {
+  local heading="$1"
+  local pattern="$2"
+  local status
+
+  printf '\n%s\n' "$heading"
+  if grep -rnE --include="*.kt" -- "$pattern" "$TARGET_DIR/"; then
+    return 0
+  else
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      echo "  (none found)"
+      return 0
+    fi
+    return "$status"
+  fi
+}
+
 echo "=== Scanning Kotlin hotspots in: $TARGET_DIR ==="
 
-echo ""
-echo "[1] 多段コレクションチェーン (map/filter/flatMap/sorted の連続):"
-grep -rnE --include="*.kt" '\.(map|filter|flatMap|sortedBy|sortedWith)\s*\{.*\}\s*\.(map|filter|flatMap|sortedBy|take|first)' "$TARGET_DIR" || echo "  (none found on single lines)"
-
-echo ""
-echo "[2] Regex / Pattern / Formatter の都度生成候補:"
-grep -rnE --include="*.kt" '(Regex\(|toRegex\(|Pattern\.compile\(|SimpleDateFormat\()' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[3] 線形探索・重複操作の候補 (.contains / .find / .indexOf):"
-grep -rnE --include="*.kt" '\.(contains|find|indexOf|firstOrNull)\s*(\(|\{)' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[4] プリミティブのボクシング配列・リスト候補 (Array<Int|Long|Double|Float>):"
-grep -rnE --include="*.kt" 'Array<(Int|Long|Double|Float|Boolean)>' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[5] 可変長引数・スプレッド演算子や Pair/Triple 生成候補:"
-grep -rnE --include="*.kt" '(vararg\s+|\bPair\(|\bTriple\(|\sto\s)' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[6] 先頭削除・LinkedList の利用候補 (removeAt(0) / removeFirst / LinkedList):"
-grep -rnE --include="*.kt" '(removeAt\(\s*0\s*\)|\.removeFirst\(|LinkedList)' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[7] 構文・API の隠れた割り当て候補 (values() / withIndex() / by lazy / runCatching):"
-grep -rnE --include="*.kt" '(\.values\(\)|\.withIndex\(\)|\bby\s+lazy\b|\brunCatching\s*\{)' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[8] 時刻取得の繰り返し・個別ピクセル取得候補 (Clock.System.now / currentTimeMillis / getPixel):"
-grep -rnE --include="*.kt" '(Clock\.System\.now\(|System\.currentTimeMillis\(|System\.nanoTime\(|\.getPixel\()' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[9] 文字列の部分処理連鎖候補 (substring / trim / lowercase / uppercase / replace):"
-grep -rnE --include="*.kt" '\.(substring|trim|lowercase|uppercase|replace)\([^)]*\)\s*\.(substring|trim|lowercase|uppercase|replace)\(' "$TARGET_DIR" || echo "  (none found)"
-
-echo ""
-echo "[10] アニメーションループ・描画ホットパスの候補 (postDelayed / saveLayer / createBitmap / setPixel / Gradient / lockCanvas):"
-grep -rnE --include="*.kt" '(postDelayed\(|\.saveLayer\(|createBitmap\(|\.setPixel\(|(Linear|Radial|Sweep)Gradient\(|\.lock(Hardware)?Canvas\()' "$TARGET_DIR" || echo "  (none found)"
+scan "[1] 同一行の多段コレクション操作" \
+  '\.(map|filter|flatMap|sortedBy|sortedWith)[[:space:]]*\{.*\}[[:space:]]*\.(map|filter|flatMap|sorted|sortedBy|sortedWith|take|first)[[:space:]]*[({]'
+scan "[2] 正規表現・日付フォーマッタの生成候補" \
+  '(Regex\(|toRegex\(|Pattern\.compile\(|SimpleDateFormat\()'
+scan "[3] 探索の候補（contains / find / indexOf / firstOrNull）" \
+  '\.(contains|find|indexOf|firstOrNull)[[:space:]]*[({]'
+scan "[4] プリミティブ値をボクシングする配列の候補" \
+  'Array<(Int|Long|Double|Float|Boolean)>'
+scan "[5] 可変長引数の宣言と Pair / Triple の生成候補" \
+  '((^|[^[:alnum:]_])(vararg[[:space:]]|Pair\(|Triple\()|[[:space:]]to[[:space:]])'
+scan "[6] 先頭削除・LinkedList の利用候補" \
+  '(removeAt\([[:space:]]*0[[:space:]]*\)|\.removeFirst\(|LinkedList)'
+scan "[7] 割り当てを確認する API の候補（values / withIndex / by lazy / runCatching）" \
+  '(\.values\(\)|\.withIndex\(\)|(^|[^[:alnum:]_])(by[[:space:]]+lazy([^[:alnum:]_]|$)|runCatching[[:space:]]*\{))'
+scan "[8] 時刻取得と単一ピクセル読み取りの候補" \
+  '(Clock\.System\.now\(|System\.currentTimeMillis\(|System\.nanoTime\(|\.getPixel\()'
+scan "[9] 同一行の文字列操作の連鎖" \
+  '\.(substring|trim|lowercase|uppercase|replace)\([^)]*\)[[:space:]]*\.(substring|trim|lowercase|uppercase|replace)\('
+scan "[10] アニメーションの駆動と描画 API の利用候補" \
+  '(postDelayed\(|\.saveLayer\(|createBitmap\(|\.setPixel\(|(Linear|Radial|Sweep)Gradient\(|\.lock(Hardware)?Canvas\()'

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# skills/ 配下の各 SKILL.md が必須のフロントマター (name, description) を持っているか検証するスクリプト
+# skills/ 直下の各スキルで SKILL.md と必須のフロントマター項目を確認します。
 
 set -euo pipefail
 
@@ -26,15 +26,33 @@ for skill_dir in "$SKILLS_DIR"/*/; do
     continue
   fi
 
-  # フロントマター内の name と description を確認
-  if ! grep -q "^name: ${skill_name}$" "$skill_file"; then
-    echo "❌ [$skill_name] Frontmatter 'name: $skill_name' is missing or mismatched in SKILL.md"
+  # ファイル先頭の区切り行で囲まれた範囲だけを読み取ります。
+  if ! frontmatter=$(awk '
+    { sub(/\r$/, "") }
+    NR == 1 { if ($0 != "---") exit 1; next }
+    $0 == "---" { closed = 1; exit }
+    { print }
+    END { if (!closed) exit 1 }
+  ' "$skill_file"); then
+    echo "❌ [$skill_name] SKILL.md frontmatter must be enclosed by --- at the start of the file"
     EXIT_CODE=1
+    continue
   fi
 
-  if ! grep -q "^description:" "$skill_file"; then
+  valid=1
+  if ! grep -Fxq "name: $skill_name" <<< "$frontmatter"; then
+    echo "❌ [$skill_name] Frontmatter 'name: $skill_name' is missing or mismatched in SKILL.md"
+    valid=0
+  fi
+
+  if ! grep -q "^description:" <<< "$frontmatter"; then
     echo "❌ [$skill_name] Frontmatter 'description:' is missing in SKILL.md"
+    valid=0
+  fi
+
+  if [ "$valid" -eq 0 ]; then
     EXIT_CODE=1
+    continue
   fi
 
   lines=$(wc -l < "$skill_file" | tr -d ' ')

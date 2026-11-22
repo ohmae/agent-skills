@@ -1,18 +1,18 @@
 # JUnit による簡易計測
 
-大規模なベンチマークフレームワーク（JMH や Android Microbenchmark）を導入しなくても、既存の JUnit テスト上で素早く「仮説に基づく修正が本当に効果を生んだか」を検証するための手順です。
+既存の JUnit テスト環境を使い、仮説に基づく修正の効果を測ります。
 
 ## 計測条件
 
 計測範囲は仮説に合わせます。定常状態の比較では、初回のクラスロードや JIT コンパイルの影響を抑えます。起動直後の処理が対象なら、初回の条件を再現して計測します。
 
-1. 入力サイズを決める
-   - 実際の入力サイズ・分布・アクセス順序を再現し、前後で同じ条件を使います。乱数を使うならシードを固定します。1 回の処理が短い場合は、代表的な入力のまま複数回繰り返し、反復全体の前後で時刻を取って 1 回あたりに換算します。各反復の前後で時刻を取ると、時計の読み取りコストも反復回数に比例して増えます。
-2. ウォームアップする
+1. 入力と反復回数を決めます。
+   - 実際の入力サイズ・分布・アクセス順序を再現し、前後で同じ条件を使います。乱数を使うならシードを固定します。1 回の処理が短い場合は、代表的な入力のまま複数回繰り返し、まとめて測った時間を 1 回あたりに換算します。
+2. ウォームアップします。
    - 定常状態を測る場合は、計測と同じ処理を事前に繰り返します。下の回数は初期値として使い、計測値の推移を見て調整します。
-3. デッドコード削除（DCE）を防ぐ
+3. 計測対象の結果を消費します。
    - 結果を軽量な方法で消費します。結果の利用まで含めて測る場合は実際の呼び出し側に合わせます。サイズの参照だけで計算の一部が省かれたり、出力全体のハッシュ計算が測定対象より重くなったりする場合は、出力に合う消費方法に変えます。
-4. 複数回計測する
+4. 複数回計測します。
    - 中央値や分位点を比較します。割り当てや遅延のばらつきが問題なら、GC を含む計測値の分布も確認します。
 
 ### ランタイムによる割り当ての違い
@@ -30,7 +30,9 @@ HotSpot C2 は、呼び出し先をインライン化でき、結果がその範
 
 ## ベンチマークのテンプレート
 
-以下は `Int` を返す処理を比べる JVM 用の例です。テストの配置と実行コマンドは対象モジュールに合わせます。たとえば標準の Gradle JVM プロジェクトでは `src/test/kotlin/` に置き、`./gradlew test --tests "*QuickPerfBenchmarkTest*"` で実行できます。
+JUnit 4 で `Int` を返す処理を比べる例です。データ生成と比較対象の関数（`prepareTestData`、`processOriginal`、`processOptimized`）は対象コードに合わせて用意します。対象プロジェクトが JUnit Platform や `kotlin.test` を使う場合は、既存のテスト構成に合わせてインポートを変更します。
+
+Gradle Wrapper を備えた JVM プロジェクトでは、たとえば `src/test/kotlin/` に置いて `./gradlew test --tests "*QuickPerfBenchmarkTest*"` を実行します。計測値が見えない場合はテスト結果の標準出力を確認します。
 
 ```kotlin
 import kotlin.time.Duration
@@ -48,27 +50,33 @@ class QuickPerfBenchmarkTest {
         name: String,
         warmupIterations: Int = 20,
         measureIterations: Int = 50,
+        callsPerSample: Int = 1,
         block: () -> Int
     ): Double {
         var blackhole = 0
 
-        // ウォームアップ
         repeat(warmupIterations) {
-            blackhole = 31 * blackhole + block()
+            repeat(callsPerSample) {
+                blackhole = 31 * blackhole + block()
+            }
         }
 
         val samplesMs = DoubleArray(measureIterations)
         repeat(measureIterations) { i ->
             val duration: Duration = measureTime {
-                blackhole = 31 * blackhole + block()
+                repeat(callsPerSample) {
+                    blackhole = 31 * blackhole + block()
+                }
             }
-            samplesMs[i] = duration.toDouble(DurationUnit.MILLISECONDS)
+            samplesMs[i] = duration.toDouble(DurationUnit.MILLISECONDS) / callsPerSample
         }
 
         samplesMs.sort()
-        val medianMs = samplesMs[measureIterations / 2]
+        val lowerMiddle = samplesMs[(measureIterations - 1) / 2]
+        val upperMiddle = samplesMs[measureIterations / 2]
+        val medianMs = (lowerMiddle + upperMiddle) / 2
         val minMs = samplesMs.first()
-        val p90Ms = samplesMs[(measureIterations * 0.9).toInt()]
+        val p90Ms = samplesMs[kotlin.math.ceil(measureIterations * 0.9).toInt() - 1]
 
         println(
             "[Perf] %-28s | Median: %8.3f ms | Min: %8.3f ms | P90: %8.3f ms (bh=%d)".format(
@@ -101,10 +109,11 @@ class QuickPerfBenchmarkTest {
 }
 ```
 
+短い処理では `callsPerSample` を前後で同じ値に増やします。各計測値は 1 呼び出しあたりの時間です。
+
 ## 変更前後の比較
 
-1. 前後の条件をそろえる
+1. 前後の条件をそろえます。
    - 同じプロセスで手軽に比較できます。実行順序で差が変わる場合は順序を入れ替え、初回実行や共有状態の影響を見る場合はプロセスを分けます。入力を変更する処理では、毎回同等の状態から始めます。
    - 計測の外で、同じ入力に対する前後の結果が一致することを出力型に合う方法で確認します。
-2. 比較用のコードを片付ける
-   - 計測と検証が完了したら、比較用の旧実装コードは削除し、機能テスト（エッジケースを含む正確性テスト）をクリーンな状態で残します。
+2. 比較専用に追加した旧実装は、計測と検証が終わったら削除します。変更後の挙動を確認するテストは残します。
